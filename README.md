@@ -6,7 +6,8 @@
 </div>
 
 ## 简介
-- HyperOS 一键自动移植打包
+- HyperOS 一键自动移植打包 (FUXI/NUWA/ISHTAR -> MUNCH)
+- 目标设备: POCO F4 / K40s (MUNCH)
 - Github Action 无服务器运行
 
 ## 感谢
