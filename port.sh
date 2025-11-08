@@ -225,24 +225,40 @@ blue "正在检测ROM底包" "Validating BASEROM.."
 if unzip -l ${baserom} | grep -q "payload.bin"; then
     baserom_type="payload"
     super_list="vendor mi_ext odm odm_dlkm system system_dlkm vendor_dlkm product product_dlkm system_ext"
+    green "检测到 payload.bin" "Found payload.bin in BASEROM"
 elif unzip -l ${baserom} | grep -q "br$";then
     baserom_type="br"
     super_list="vendor mi_ext odm system product system_ext"
-elif unzip -l ${baserom} | grep -q "images/super.img*"; then
+    green "检测到 new.dat.br" "Found new.dat.br in BASEROM"
+elif unzip -l ${baserom} | grep -q "images/super.img"; then
+    baserom_type="super_img"
     is_base_rom_eu=true
     super_list="vendor mi_ext odm system product system_ext"
+    green "检测到 images/super.img (xiaomi.eu格式)" "Found images/super.img (xiaomi.eu format) in BASEROM"
+elif unzip -l ${baserom} | grep -q "super.img"; then
+    baserom_type="super_img_root"
+    super_list="vendor mi_ext odm system product system_ext"
+    green "检测到 super.img (根目录)" "Found super.img (root) in BASEROM"
 else
-    error "底包中未发现payload.bin以及br文件，请使用MIUI官方包后重试" "payload.bin/new.br not found, please use HyperOS official OTA zip package."
-    exit
+    error "底包中未发现payload.bin、super.img或br文件" "payload.bin/super.img/br not found in BASEROM"
+    yellow "支持的格式: 官方OTA (payload.bin), xiaomi.eu (super.img), 或 new.dat.br" "Supported: Official OTA (payload.bin), xiaomi.eu (super.img), or new.dat.br"
+    exit 1
 fi
 
 blue "开始检测ROM移植包" "Validating PORTROM.."
-if unzip -l ${portrom} | grep  -q "payload.bin"; then
-    green "ROM初步检测通过" "ROM validation passed."
-elif [[ ${portrom} == *"xiaomi.eu"* ]];then
+if unzip -l ${portrom} | grep -q "payload.bin"; then
+    portrom_type="payload"
+    green "检测到 payload.bin" "Found payload.bin in PORTROM"
+elif unzip -l ${portrom} | grep -q "images/super.img"; then
+    portrom_type="super_img"
     is_eu_rom=true
+    green "检测到 images/super.img (xiaomi.eu)" "Found images/super.img (xiaomi.eu) in PORTROM"
+elif unzip -l ${portrom} | grep -q "super.img"; then
+    portrom_type="super_img_root"
+    green "检测到 super.img (根目录)" "Found super.img (root) in PORTROM"
 else
-    error "目标移植包没有payload.bin，请用MIUI官方包作为移植包" "payload.bin not found, please use HyperOS official OTA zip package."
+    error "移植包中未发现payload.bin或super.img" "payload.bin/super.img not found in PORTROM"
+    exit 1
 fi
 
 green "ROM初步检测通过" "ROM validation passed."
@@ -275,31 +291,88 @@ if [[ ${baserom_type} == 'payload' ]];then
     blue "正在提取底包 [payload.bin]" "Extracting files from BASEROM [payload.bin]"
     unzip ${baserom} payload.bin -d build/baserom > /dev/null 2>&1 ||error "解压底包 [payload.bin] 时出错" "Extracting [payload.bin] error"
     green "底包 [payload.bin] 提取完毕" "[payload.bin] extracted."
+
 elif [[ ${baserom_type} == 'br' ]];then
     blue "正在提取底包 [new.dat.br]" "Extracting files from BASEROM [*.new.dat.br]"
     unzip ${baserom} -d build/baserom  > /dev/null 2>&1 || error "解压底包 [new.dat.br]时出错" "Extracting [new.dat.br] error"
     green "底包 [new.dat.br] 提取完毕" "[new.dat.br] extracted."
-elif [[ ${is_base_rom_eu} == true ]];then
-    blue "正在提取底包 [super.img]" "Extracting files from BASETROM [super.img]"
-    unzip ${baserom} 'images/*' -d build/baserom >  /dev/null 2>&1 ||error "解压移植包 [super.img] 时出错"  "Extracting [super.img] error"
-    blue "合并super.img* 到super.img" "Merging super.img.* into super.img"
-    simg2img build/baserom/images/super.img.* build/baserom/images/super.img
-    rm -rf build/baserom/images/super.img.*
+
+elif [[ ${baserom_type} == 'super_img' ]];then
+    blue "正在提取底包 [super.img] 从 images/ 目录" "Extracting BASEROM [super.img] from images/"
+    unzip ${baserom} 'images/*' -d build/baserom >  /dev/null 2>&1 ||error "解压底包 [super.img] 时出错"  "Extracting [super.img] error"
+
+    # 检查是否是sparse image (super.img.* 分片)
+    if ls build/baserom/images/super.img.* >/dev/null 2>&1; then
+        blue "检测到分片super.img，正在合并..." "Detected sparse super.img, merging..."
+        simg2img build/baserom/images/super.img.* build/baserom/images/super.img
+        rm -rf build/baserom/images/super.img.*
+    fi
+
     mv build/baserom/images/super.img build/baserom/super.img
     green "底包 [super.img] 提取完毕" "[super.img] extracted."
-    mv build/baserom/images/boot.img build/baserom/
+
+    # 移动其他文件
+    if [ -f build/baserom/images/boot.img ];then
+        mv build/baserom/images/boot.img build/baserom/
+    fi
     mkdir -p build/baserom/firmware-update
-    mv build/baserom/images/* build/baserom/firmware-update
+    if ls build/baserom/images/* >/dev/null 2>&1; then
+        mv build/baserom/images/* build/baserom/firmware-update 2>/dev/null || true
+    fi
+
+elif [[ ${baserom_type} == 'super_img_root' ]];then
+    blue "正在提取底包 [super.img] 从根目录" "Extracting BASEROM [super.img] from root"
+    unzip ${baserom} 'super.img*' -d build/baserom >  /dev/null 2>&1 ||error "解压底包 [super.img] 时出错"  "Extracting [super.img] error"
+
+    # 检查sparse image
+    if ls build/baserom/super.img_sparsechunk.* >/dev/null 2>&1; then
+        blue "检测到sparse chunks，正在合并..." "Detected sparse chunks, merging..."
+        simg2img build/baserom/super.img_sparsechunk.* build/baserom/super.img
+        rm -rf build/baserom/super.img_sparsechunk.*
+    elif ls build/baserom/super.img.* >/dev/null 2>&1; then
+        blue "检测到分片super.img，正在合并..." "Detected super.img parts, merging..."
+        simg2img build/baserom/super.img.* build/baserom/super.img
+        rm -rf build/baserom/super.img.*
+    fi
+
+    green "底包 [super.img] 提取完毕" "[super.img] extracted."
+
+    # 尝试提取boot.img
+    unzip ${baserom} 'boot.img' -d build/baserom >  /dev/null 2>&1 || true
 fi
 
-if [[ ${is_eu_rom} == true ]];then
-    blue "正在提取移植包 [super.img]" "Extracting files from PORTROM [super.img]"
-    unzip ${portrom} 'images/super.img.*' -d build/portrom >  /dev/null 2>&1 ||error "解压移植包 [super.img] 时出错"  "Extracting [super.img] error"
-    blue "合并super.img* 到super.img" "Merging super.img.* into super.img"
-    simg2img build/portrom/images/super.img.* build/portrom/images/super.img
-    rm -rf build/portrom/images/super.img.*
+if [[ ${portrom_type} == 'super_img' ]];then
+    blue "正在提取移植包 [super.img] 从 images/ 目录" "Extracting PORTROM [super.img] from images/"
+    unzip ${portrom} 'images/super.img*' -d build/portrom >  /dev/null 2>&1 ||error "解压移植包 [super.img] 时出错"  "Extracting [super.img] error"
+
+    # 检查sparse image
+    if ls build/portrom/images/super.img.* >/dev/null 2>&1; then
+        blue "检测到分片super.img，正在合并..." "Detected sparse super.img, merging..."
+        simg2img build/portrom/images/super.img.* build/portrom/images/super.img
+        rm -rf build/portrom/images/super.img.*
+    fi
+
     mv build/portrom/images/super.img build/portrom/super.img
     green "移植包 [super.img] 提取完毕" "[super.img] extracted."
+    is_eu_rom=true
+
+elif [[ ${portrom_type} == 'super_img_root' ]];then
+    blue "正在提取移植包 [super.img] 从根目录" "Extracting PORTROM [super.img] from root"
+    unzip ${portrom} 'super.img*' -d build/portrom >  /dev/null 2>&1 ||error "解压移植包 [super.img] 时出错"  "Extracting [super.img] error"
+
+    # 检查sparse image
+    if ls build/portrom/super.img_sparsechunk.* >/dev/null 2>&1; then
+        blue "检测到sparse chunks，正在合并..." "Detected sparse chunks, merging..."
+        simg2img build/portrom/super.img_sparsechunk.* build/portrom/super.img
+        rm -rf build/portrom/super.img_sparsechunk.*
+    elif ls build/portrom/super.img.* >/dev/null 2>&1; then
+        blue "检测到分片super.img，正在合并..." "Detected super.img parts, merging..."
+        simg2img build/portrom/super.img.* build/portrom/super.img
+        rm -rf build/portrom/super.img.*
+    fi
+
+    green "移植包 [super.img] 提取完毕" "[super.img] extracted."
+
 else
     blue "正在提取移植包 [payload.bin]" "Extracting files from PORTROM [payload.bin]"
     unzip ${portrom} payload.bin -d build/portrom  > /dev/null 2>&1 ||error "解压移植包 [payload.bin] 时出错"  "Extracting [payload.bin] error"
@@ -307,23 +380,24 @@ else
 fi
 
 if [[ ${baserom_type} == 'payload' ]];then
-
     blue "开始分解底包 [payload.bin]" "Unpacking BASEROM [payload.bin]"
     payload-dumper-go -o build/baserom/images/ build/baserom/payload.bin >/dev/null 2>&1 ||error "分解底包 [payload.bin] 时出错" "Unpacking [payload.bin] failed"
 
-elif [[ ${is_base_rom_eu} == true ]];then
-     blue "开始分解底包 [super.img]" "Unpacking BASEROM [super.img]"
-        for i in ${super_list}; do 
-            python3 bin/lpunpack.py -p ${i} build/baserom/super.img build/baserom/images
-        done
+elif [[ ${baserom_type} == 'super_img' ]] || [[ ${baserom_type} == 'super_img_root' ]];then
+    blue "开始分解底包 [super.img]" "Unpacking BASEROM [super.img]"
+    for i in ${super_list}; do
+        blue "  提取分区: ${i}" "  Extracting partition: ${i}"
+        python3 bin/lpunpack.py -p ${i} build/baserom/super.img build/baserom/images 2>&1 | grep -v "^Extracting" || true
+    done
+    green "底包 super.img 分解完成" "BASEROM super.img unpacked"
 
 elif [[ ${baserom_type} == 'br' ]];then
     blue "开始分解底包 [new.dat.br]" "Unpacking BASEROM[new.dat.br]"
-        for i in ${super_list}; do 
-            ${tools_dir}/brotli -d build/baserom/$i.new.dat.br >/dev/null 2>&1
-            sudo python3 ${tools_dir}/sdat2img.py build/baserom/$i.transfer.list build/baserom/$i.new.dat build/baserom/images/$i.img >/dev/null 2>&1
-            rm -rf build/baserom/$i.new.dat* build/baserom/$i.transfer.list build/baserom/$i.patch.*
-        done
+    for i in ${super_list}; do
+        ${tools_dir}/brotli -d build/baserom/$i.new.dat.br >/dev/null 2>&1
+        sudo python3 ${tools_dir}/sdat2img.py build/baserom/$i.transfer.list build/baserom/$i.new.dat build/baserom/images/$i.img >/dev/null 2>&1
+        rm -rf build/baserom/$i.new.dat* build/baserom/$i.transfer.list build/baserom/$i.patch.*
+    done
 fi
 
 for part in system system_dlkm system_ext product product_dlkm mi_ext;do
@@ -361,11 +435,12 @@ for part in ${super_list};do
     if [[ $part =~ ^(vendor|odm|vendor_dlkm|odm_dlkm)$ ]] && [[ -f "build/portrom/images/$part.img" ]]; then
         blue "从底包中提取 [${part}]分区 ..." "Extracting [${part}] from BASEROM"
     else
-        if [[ ${is_eu_rom} == true ]];then
+        if [[ ${portrom_type} == 'super_img' ]] || [[ ${portrom_type} == 'super_img_root' ]];then
             blue "PORTROM super.img 提取 [${part}] 分区..." "Extracting [${part}] from PORTROM super.img"
-            blue "lpunpack.py PORTROM super.img ${patrt}_a"
-            python3 bin/lpunpack.py -p ${part}_a build/portrom/super.img build/portrom/images 
-            mv build/portrom/images/${part}_a.img build/portrom/images/${part}.img
+            python3 bin/lpunpack.py -p ${part}_a build/portrom/super.img build/portrom/images 2>&1 | grep -v "^Extracting" || true
+            if [ -f build/portrom/images/${part}_a.img ]; then
+                mv build/portrom/images/${part}_a.img build/portrom/images/${part}.img
+            fi
         else
             blue "payload.bin 提取 [${part}] 分区..." "Extracting [${part}] from PORTROM payload.bin"
             payload-dumper-go -p ${part} -o build/portrom/images/ build/portrom/payload.bin >/dev/null 2>&1 ||error "提取移植包 [${part}] 分区时出错" "Extracting partition [${part}] error."
